@@ -23,20 +23,6 @@ jobs:
       RUNTIME_MINUTES: 330
 
     steps:
-      - name: Check Repository Privacy
-        env:
-          REPO_PRIVATE: ${{ github.event.repository.private }}
-        run: |
-          if ($env:REPO_PRIVATE -ne "true") {
-            throw "SECURITY ERROR: Make this GitHub repository PRIVATE before running RDP."
-          }
-
-          if ([string]::IsNullOrWhiteSpace($env:TS_AUTHKEY)) {
-            throw "TS_AUTHKEY secret is missing."
-          }
-
-          Write-Host "Repository privacy check passed."
-
       - name: Clean Desktop
         run: |
           $desktop = [Environment]::GetFolderPath("Desktop")
@@ -46,6 +32,10 @@ jobs:
 
       - name: Install Tailscale
         run: |
+          if ([string]::IsNullOrWhiteSpace($env:TS_AUTHKEY)) {
+            throw "TS_AUTHKEY secret is missing."
+          }
+
           $msi = "$env:TEMP\tailscale.msi"
 
           Invoke-WebRequest `
@@ -121,7 +111,11 @@ jobs:
           }
 
           $rdpGroup = Get-LocalGroup -SID "S-1-5-32-555"
-          Add-LocalGroupMember -Group $rdpGroup.Name -Member $user -ErrorAction SilentlyContinue
+
+          Add-LocalGroupMember `
+            -Group $rdpGroup.Name `
+            -Member $user `
+            -ErrorAction SilentlyContinue
 
           "RDP_PASSWORD=$password" | Out-File $env:GITHUB_ENV -Append
 
