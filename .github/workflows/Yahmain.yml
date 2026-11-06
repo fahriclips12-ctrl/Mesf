@@ -1,0 +1,195 @@
+
+name: Custom Windows ke ap
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    env:
+      RUNTIME_MINUTES: 330
+
+    steps:
+      - name: Wipe Unnecessary Pre-Installed GitHub Apps & Shortcuts
+        run: |
+          Write-Host "Cleaning desktop shortcuts..."
+          $publicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
+          $userDesktop = "$env:USERPROFILE\Desktop"
+
+          $targets = @(
+            "Unity Hub.lnk",
+            "R 4.6.0.lnk",
+            "Firefox.lnk",
+            "Google Chrome.lnk",
+            "Claim Rewards Here.lnk",
+            "Visual Studio Community.lnk"
+          )
+
+          foreach ($target in $targets) {
+            Remove-Item "$publicDesktop\$target" -Force -ErrorAction SilentlyContinue
+            Remove-Item "$userDesktop\$target" -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Install Tailscale
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TS_AUTHKEY)) {
+            throw "Missing GitHub Secret TS_AUTHKEY"
+          }
+
+          $ProgressPreference = "SilentlyContinue"
+
+          winget install `
+            --id Tailscale.Tailscale `
+            --silent `
+            --accept-package-agreements `
+            --accept-source-agreements
+
+          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (-not (Test-Path $ts)) {
+            throw "Tailscale executable not found"
+          }
+
+          & $ts up `
+            --authkey="$env:TS_AUTHKEY" `
+            --hostname=workfly-windows
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Tailscale connection failed"
+          }
+
+          Start-Sleep -Seconds 5
+
+      - name: Configure Desktop
+        run: |
+          Write-Host "Configuring taskbar..."
+
+          $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+
+          Set-ItemProperty `
+            -Path $path `
+            -Name "TaskbarGlomLevel" `
+            -Value 0 `
+            -ErrorAction SilentlyContinue
+
+      - name: Minimize Running Infrastructure Windows
+        run: |
+          $shell = New-Object -ComObject Shell.Application
+          $shell.MinimizeAll()
+          Start-Sleep -Seconds 2
+
+      - name: Optimize Resolution for Mobile Display
+        run: |
+          try {
+            Set-DisplayResolution -Width 1600 -Height 1200 -Force
+            Write-Host "Resolution set to 1600x1200"
+          }
+          catch {
+            Write-Host "Resolution optimization skipped"
+          }
+
+      - name: Download & Force Consumer Build of Opera GX
+        run: |
+          Write-Host "Fetching Opera GX..."
+
+          $url = "https://net.geo.opera.com/opera_gx/stable/windows?utm_source=inf&utm_medium=gx"
+          $installer = "$env:TEMP\OperaGXSetup.exe"
+
+          $ProgressPreference = "SilentlyContinue"
+
+          Invoke-WebRequest -Uri $url -OutFile $installer
+
+          if (Test-Path $installer) {
+            Start-Process -FilePath $installer `
+              -ArgumentList "--silent=1", "--allusers=1", "--launchbrowser=0", "--desktopshortcut=1" `
+              -Wait -NoNewWindow
+
+            Start-Sleep -Seconds 5
+
+            $publicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
+            $userDesktop = "$env:USERPROFILE\Desktop"
+
+            if (Test-Path "$userDesktop\Opera GX.lnk") {
+              Move-Item "$userDesktop\Opera GX.lnk" $publicDesktop -Force -ErrorAction SilentlyContinue
+            }
+
+            $operaExe = "$env:ProgramFiles\Opera GX\opera.exe"
+
+            if (-not (Test-Path $operaExe)) {
+              $operaExe = "${env:ProgramFiles(x86)}\Opera GX\opera.exe"
+            }
+
+            if (Test-Path $operaExe) {
+              $WshShell = New-Object -ComObject WScript.Shell
+              $Shortcut = $WshShell.CreateShortcut("$publicDesktop\Opera GX Browser.lnk")
+              $Shortcut.TargetPath = $operaExe
+              $Shortcut.Arguments = "--no-first-run"
+              $Shortcut.Save()
+            }
+          }
+          else {
+            throw "Opera GX download failed"
+          }
+
+      - name: Display Tailscale Connection Information
+        run: |
+          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "       TAILSCALE CONNECTION STATUS"
+          Write-Host "=========================================="
+
+          & $ts status
+
+          $ip = & $ts ip -4
+
+          Write-Host ""
+          Write-Host "TAILSCALE IP: $ip"
+          Write-Host "=========================================="
+
+      - name: Verify Tailscale
+        run: |
+          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          & $ts status
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Tailscale status check failed"
+          }
+
+      - name: Keep Alive
+        run: |
+          $mins = [int]"${{ env.RUNTIME_MINUTES }}"
+          $end = (Get-Date).AddMinutes($mins)
+
+          Write-Host "Tailscale session started."
+          Write-Host "Runtime: $mins minutes"
+
+          while ((Get-Date) -lt $end) {
+            $now = Get-Date
+            $remaining = $end - $now
+
+            Write-Host (
+              "Heartbeat " +
+              $now.ToString("HH:mm:ss") +
+              " | Remaining: " +
+              $remaining.ToString("hh\:mm")
+            )
+
+            Start-Sleep -Seconds 60
+          }
+
+          Write-Host "Maximum runtime reached."
